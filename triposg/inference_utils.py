@@ -6,8 +6,11 @@ from skimage import measure
 from einops import repeat
 from diso import DiffDMC
 import torch.nn.functional as F
+import logging
 
 from triposg.utils.typing import *
+
+logger = logging.getLogger(__name__)
 
 def generate_dense_grid_points_gpu(bbox_min: torch.Tensor,
                                    bbox_max: torch.Tensor,
@@ -63,7 +66,9 @@ def find_mesh_grid_coordinates_fast_gpu(occupancy_grid, n_limits=-1):
     core_mesh_coords = torch.nonzero(occupied & neighbors_unoccupied, as_tuple=False) + 1
 
     if n_limits != -1 and core_mesh_coords.shape[0] > n_limits:
-        print(f"core mesh coords {core_mesh_coords.shape[0]} is too large, limited to {n_limits}")
+        logger.info(
+            f"core mesh coords {core_mesh_coords.shape[0]} is too large, limited to {n_limits}"
+        )
         ind = np.random.choice(core_mesh_coords.shape[0], n_limits, True)
         core_mesh_coords = core_mesh_coords[ind]
 
@@ -91,7 +96,9 @@ def find_candidates_band(occupancy_grid: torch.Tensor, band_threshold: float, n_
     core_mesh_coords = torch.nonzero(in_band, as_tuple=False) + 1
 
     if n_limits != -1 and core_mesh_coords.shape[0] > n_limits:
-        print(f"core mesh coords {core_mesh_coords.shape[0]} is too large, limited to {n_limits}")
+        logger.info(
+            f"core mesh coords {core_mesh_coords.shape[0]} is too large, limited to {n_limits}"
+        )
         ind = np.random.choice(core_mesh_coords.shape[0], n_limits, True)
         core_mesh_coords = core_mesh_coords[ind]
 
@@ -157,7 +164,7 @@ def hierarchical_extract_geometry(geometric_func: Callable,
         indexing="ij"
     )
     
-    print(f'step 1 query num: {xyz_samples.shape[0]}')
+    logger.info(f'step 1 query num: {xyz_samples.shape[0]}')
     grid_logits = geometric_func(xyz_samples.unsqueeze(0)).to(torch.float16).view(grid_size[0], grid_size[1], grid_size[2])
     # print(f'step 1 grid_logits shape: {grid_logits.shape}')
     for i in range(hierarchical_octree_depth - dense_octree_depth):
@@ -170,7 +177,7 @@ def hierarchical_extract_geometry(geometric_func: Callable,
         band_threshold = 1.0
         edge_coords = find_candidates_band(grid_logits, band_threshold)
         expanded_coords = expand_edge_region_fast(edge_coords, grid_size=int(grid_size/2)).to(torch.float16)
-        print(f'step {i+2} query num: {len(expanded_coords)}')
+        logger.info(f'step {i+2} query num: {len(expanded_coords)}')
         expanded_coords_norm = (expanded_coords - normalize_offset) * (abs(bounds[0]) / normalize_offset)
 
         all_logits = None
@@ -189,12 +196,12 @@ def hierarchical_extract_geometry(geometric_func: Callable,
         torch.cuda.empty_cache()
     mesh_v_f = []
     try:
-        print("final grids shape = ", grid_logits.shape)
+        logger.info("final grids shape = %s", grid_logits.shape)
         vertices, faces, normals, _ = measure.marching_cubes(grid_logits.float().cpu().numpy(), 0, method="lewiner")
         vertices = vertices / (2**hierarchical_octree_depth) * bbox_size.cpu().numpy() + bbox_min.cpu().numpy()
         mesh_v_f = (vertices.astype(np.float32), np.ascontiguousarray(faces))
     except Exception as e:
-        print(e)
+        logger.error(e)
         torch.cuda.empty_cache()
         mesh_v_f = (None, None)
 
@@ -462,7 +469,7 @@ def flash_extract_geometry(
     mesh_v_f = []
     grid_logits = grid_logits[0]
     try:
-        print("final grids shape = ", grid_logits.shape)
+        logger.info("final grids shape = %s", grid_logits.shape)
         dmc = DiffDMC(dtype=torch.float32).to(grid_logits.device)
         sdf = -grid_logits / octree_resolution
         sdf = sdf.to(torch.float32).contiguous()
@@ -472,7 +479,7 @@ def flash_extract_geometry(
         vertices = vertices / (2 ** octree_depth) * bbox_size + bbox_min
         mesh_v_f = (vertices.astype(np.float32), np.ascontiguousarray(faces))
     except Exception as e:
-        print(e)
+        logger.error(e)
         torch.cuda.empty_cache()
         mesh_v_f = (None, None)
 
